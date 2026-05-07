@@ -52,11 +52,23 @@ jobs:
 
           python screener.py $ARGS
 
+      - name: Send email report
+        if: success()
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: |
+          CSV=$(ls -t output/screener_*.csv 2>/dev/null | head -1)
+          if [ -n "$CSV" ]; then
+            python send_email.py "$CSV"
+          else
+            echo "No CSV found, skipping email"
+          fi
+
       - name: Upload result artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: screener-${{ github.run_number }}-${{ github.run_attempt }}
+          name: screener-${{ github.run_number }}
           path: output/
           retention-days: 90
 
