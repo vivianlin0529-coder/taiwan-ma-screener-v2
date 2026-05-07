@@ -255,7 +255,7 @@ def run(target_date: str | None = None, max_stocks: int | None = None):
 
     if results:
         df_out = (pd.DataFrame(results)
-                  .sort_values('daily_spread')
+                  .sort_values('vol_k', ascending=False)
                   .reset_index(drop=True))
         os.makedirs('output', exist_ok=True)
         label = (target_date.replace('-', '') if target_date

@@ -2,8 +2,8 @@ name: Daily MA Screener
 
 on:
   schedule:
-    # 每天 14:00 台灣時間（UTC+8 → 06:00 UTC），週一至週五
-    - cron: '0 6 * * 1-5'
+    # 每天 13:30 台灣時間（UTC+8 → 05:30 UTC），週一至週五
+    - cron: '30 5 * * 1-5'
   workflow_dispatch:
     inputs:
       date:
@@ -79,7 +79,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add output/
           git diff --cached --quiet || \
-            git commit -m "📊 screener $(date +'%Y-%m-%d 14:00 CST') [skip ci]"
+            git commit -m "📊 screener $(date +'%Y-%m-%d 13:30 CST') [skip ci]"
           git push
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
