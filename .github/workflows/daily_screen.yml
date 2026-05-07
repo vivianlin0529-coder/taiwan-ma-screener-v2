@@ -2,10 +2,14 @@ name: Daily MA Screener
 
 on:
   schedule:
-    # 每天 14:10 台灣時間（UTC+8 → 06:10 UTC），收盤後約45分鐘
-    - cron: '10 6 * * 1-5'
+    # 每天 14:00 台灣時間（UTC+8 → 06:00 UTC），週一至週五
+    - cron: '0 6 * * 1-5'
   workflow_dispatch:
     inputs:
+      date:
+        description: '截止日期 YYYY-MM-DD（空白 = 最新）'
+        required: false
+        default: ''
       preview:
         description: 'Preview 模式：只跑前 N 檔（0 = 全量）'
         required: false
@@ -14,13 +18,15 @@ on:
 jobs:
   screen:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -37,28 +43,31 @@ jobs:
 
       - name: Run screener
         run: |
-          PREVIEW=${{ github.event.inputs.preview || '0' }}
-          if [ "$PREVIEW" -gt "0" ]; then
-            python screener.py --preview $PREVIEW
-          else
-            python screener.py
-          fi
+          DATE_ARG="${{ github.event.inputs.date }}"
+          PREVIEW="${{ github.event.inputs.preview || '0' }}"
 
-      - name: Upload results artifact
+          ARGS=""
+          [ -n "$DATE_ARG" ] && ARGS="$ARGS --date $DATE_ARG"
+          [ "$PREVIEW" -gt "0" ] 2>/dev/null && ARGS="$ARGS --preview $PREVIEW"
+
+          python screener.py $ARGS
+
+      - name: Upload result artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: screener-result-${{ github.run_number }}
+          name: screener-${{ github.run_number }}-${{ github.run_attempt }}
           path: output/
-          retention-days: 30
+          retention-days: 90
 
-      - name: Commit & push results
+      - name: Commit & push results to repo
         if: success()
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add output/
-          git diff --cached --quiet || git commit -m "🤖 screener result $(date +'%Y-%m-%d %H:%M') [skip ci]"
+          git diff --cached --quiet || \
+            git commit -m "📊 screener $(date +'%Y-%m-%d 14:00 CST') [skip ci]"
           git push
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
