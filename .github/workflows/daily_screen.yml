@@ -14,6 +14,10 @@ on:
         description: 'Preview 模式：只跑前 N 檔（0 = 全量）'
         required: false
         default: '0'
+      force:
+        description: '強制執行（忽略休市檢查）true/false'
+        required: false
+        default: 'false'
 
 jobs:
   screen:
@@ -41,19 +45,34 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Check market open
+        id: market_check
+        run: |
+          FORCE="${{ github.event.inputs.force || 'false' }}"
+          if [ "$FORCE" = "true" ]; then
+            echo "market_open=true" >> $GITHUB_OUTPUT
+            echo "⚡ 強制執行模式，略過休市檢查"
+          else
+            if python check_market.py; then
+              echo "market_open=true" >> $GITHUB_OUTPUT
+            else
+              echo "market_open=false" >> $GITHUB_OUTPUT
+              echo "🚫 今日休市，跳過篩選與寄信"
+            fi
+          fi
+
       - name: Run screener
+        if: steps.market_check.outputs.market_open == 'true'
         run: |
           DATE_ARG="${{ github.event.inputs.date }}"
           PREVIEW="${{ github.event.inputs.preview || '0' }}"
-
           ARGS=""
           [ -n "$DATE_ARG" ] && ARGS="$ARGS --date $DATE_ARG"
           [ "$PREVIEW" -gt "0" ] 2>/dev/null && ARGS="$ARGS --preview $PREVIEW"
-
           python screener.py $ARGS
 
       - name: Send email report
-        if: success()
+        if: steps.market_check.outputs.market_open == 'true'
         env:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: |
@@ -65,15 +84,15 @@ jobs:
           fi
 
       - name: Upload result artifact
-        if: always()
+        if: steps.market_check.outputs.market_open == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: screener-${{ github.run_number }}
           path: output/
           retention-days: 90
 
-      - name: Commit & push results to repo
-        if: success()
+      - name: Commit & push results
+        if: steps.market_check.outputs.market_open == 'true'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
