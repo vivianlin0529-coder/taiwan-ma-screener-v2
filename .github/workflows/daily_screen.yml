@@ -1,0 +1,64 @@
+name: Daily MA Screener
+
+on:
+  schedule:
+    # 每天 14:10 台灣時間（UTC+8 → 06:10 UTC），收盤後約45分鐘
+    - cron: '10 6 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      preview:
+        description: 'Preview 模式：只跑前 N 檔（0 = 全量）'
+        required: false
+        default: '0'
+
+jobs:
+  screen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run screener
+        run: |
+          PREVIEW=${{ github.event.inputs.preview || '0' }}
+          if [ "$PREVIEW" -gt "0" ]; then
+            python screener.py --preview $PREVIEW
+          else
+            python screener.py
+          fi
+
+      - name: Upload results artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screener-result-${{ github.run_number }}
+          path: output/
+          retention-days: 30
+
+      - name: Commit & push results
+        if: success()
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add output/
+          git diff --cached --quiet || git commit -m "🤖 screener result $(date +'%Y-%m-%d %H:%M') [skip ci]"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
