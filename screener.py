@@ -10,6 +10,7 @@ Taiwan MA Screener v2
         BIAS2 < 3.0%  → |MA10 - MA20| / MA20
         BIAS3 < 6.4%  → |MA20 - MA60| / MA60
   ⑤  日線縮軌：MA5/10/20 spread < 5%，且連續 3 日收縮
+  ⑥  外資連買：連續 3 個交易日外資/陸資淨買超 > 0
 
 用法:
   python screener.py                           # 全量掃描
@@ -21,7 +22,7 @@ import twstock
 import yfinance as yf
 import pandas as pd
 import requests, json
-from datetime import datetime
+from datetime import datetime, timedelta
 import time, logging, os, sys
 
 logging.basicConfig(level=logging.INFO,
@@ -29,14 +30,15 @@ logging.basicConfig(level=logging.INFO,
                     datefmt='%H:%M:%S')
 log = logging.getLogger(__name__)
 
-EXCLUDE_GROUPS        = {'金融保險業', '紡織纖維', '通信網路業'}
-BIAS1_MAX             = 2.4
-BIAS2_MAX             = 3.0
-BIAS3_MAX             = 6.4
-DAILY_SPREAD_MAX      = 5.0
-DAILY_CONTRACT_WINDOW = 3
-VOLUME_MIN            = 1000
-SLEEP                 = 0.35
+EXCLUDE_GROUPS           = {'金融保險業', '紡織纖維', '通信網路業'}
+BIAS1_MAX                = 2.4
+BIAS2_MAX                = 3.0
+BIAS3_MAX                = 6.4
+DAILY_SPREAD_MAX         = 5.0
+DAILY_CONTRACT_WINDOW    = 3
+VOLUME_MIN               = 1000
+FOREIGN_NET_BUY_DAYS     = 3   # ⑥ 外資連買天數
+SLEEP                    = 0.35
 
 
 # ── 0. 全市場股數字典（市值 fallback） ────────────────────────────────────────
@@ -63,6 +65,124 @@ def build_shares_dict() -> dict[str, int]:
         log.warning(f'TPEx shares dict: {e}')
     log.info(f'股數字典: {len(shares)} 筆')
     return shares
+
+
+# ── ⑥ 外資連買字典 ──────────────────────────────────────────────────────────
+def _recent_trading_dates(n: int = 10) -> list[str]:
+    """傳回最近 n 個可能的交易日（YYYYMMDD），最新在前，供逐一嘗試"""
+    dates = []
+    d = datetime.now()
+    while len(dates) < n:
+        if d.weekday() < 5:   # Mon–Fri
+            dates.append(d.strftime('%Y%m%d'))
+        d -= timedelta(days=1)
+    return dates
+
+
+def _fetch_twse_foreign_one_day(date_str: str) -> dict[str, int]:
+    """
+    抓 TWSE T86（三大法人）單日外資買賣超（單位：股）。
+    回傳 {code: net_shares}，失敗或當日休市回傳 {}。
+    """
+    url = (f'https://www.twse.com.tw/rwd/zh/fund/T86'
+           f'?response=json&date={date_str}&selectType=ALL')
+    try:
+        resp = requests.get(url, timeout=20)
+        data = resp.json()
+        if data.get('stat') != 'OK' or not data.get('data'):
+            return {}
+        result = {}
+        for row in data['data']:
+            code = str(row[0]).strip()
+            if not (len(code) == 4 and code.isdigit()):
+                continue
+            try:
+                # row[4] = 外陸資買賣超股數（含外資自營）
+                net = int(str(row[4]).replace(',', '').replace('+', '').strip())
+                result[code] = net
+            except Exception:
+                pass
+        return result
+    except Exception as e:
+        log.debug(f'TWSE T86 {date_str}: {e}')
+        return {}
+
+
+def _fetch_tpex_foreign_one_day(date_str: str) -> dict[str, int]:
+    """
+    抓 TPEx 三大法人外資買賣超（單位：股）。
+    date_str 格式 YYYYMMDD，轉成 YYYY/MM/DD 供 API 使用。
+    """
+    ymd = f'{date_str[:4]}/{date_str[4:6]}/{date_str[6:]}'
+    url = (f'https://www.tpex.org.tw/openapi/v1/tpex_fund_wforeign'
+           f'?date={ymd}')
+    try:
+        raw = b''
+        for chunk in requests.get(url, timeout=30, stream=True).iter_content(8192):
+            raw += chunk
+        rows = json.loads(raw)
+        if not rows:
+            return {}
+        result = {}
+        for r in rows:
+            code = str(r.get('SecuritiesCompanyCode', '')).strip()
+            if not (len(code) == 4 and code.isdigit()):
+                continue
+            try:
+                net_raw = r.get('ForeignNetBuy', '0') or '0'
+                net = int(str(net_raw).replace(',', '').replace('+', '').strip())
+                result[code] = net
+            except Exception:
+                pass
+        return result
+    except Exception as e:
+        log.debug(f'TPEx foreign {date_str}: {e}')
+        return {}
+
+
+def fetch_foreign_netbuy_dict(n_days: int = 3) -> dict[str, list[int]]:
+    """
+    取最近 n_days 個有資料的交易日，合併 TWSE + TPEx 外資買賣超。
+    回傳 {code: [net_d_oldest, ..., net_d_latest]}，
+    若某日某股無資料則視為 0（保守：不計入連買）。
+    """
+    log.info(f'⑥  抓外資連買資料（最近 {n_days} 交易日）…')
+    candidate_dates = _recent_trading_dates(n=n_days + 7)  # 多幾天應付假日
+    collected: list[tuple[str, dict[str, int]]] = []  # [(date, {code: net})]
+
+    for date_str in candidate_dates:
+        if len(collected) >= n_days:
+            break
+        twse_day = _fetch_twse_foreign_one_day(date_str)
+        time.sleep(0.3)
+        tpex_day = _fetch_tpex_foreign_one_day(date_str)
+        time.sleep(0.3)
+        merged = {**tpex_day, **twse_day}   # TWSE 優先覆蓋（以防重複）
+        if merged:
+            collected.append((date_str, merged))
+            log.info(f'   外資 {date_str}: TWSE {len(twse_day)} + TPEx {len(tpex_day)} 股')
+        else:
+            log.debug(f'   外資 {date_str}: 無資料（可能假日）')
+
+    if len(collected) < n_days:
+        log.warning(f'外資資料只取得 {len(collected)} 天（需 {n_days} 天），跳過此篩選條件')
+        return {}
+
+    # collected 是 newest-first；反轉為 oldest-first
+    collected_asc = list(reversed(collected))  # [oldest, ..., newest]
+
+    # 整合成 {code: [net_oldest, ..., net_newest]}
+    all_codes: set[str] = set()
+    for _, day_dict in collected_asc:
+        all_codes.update(day_dict.keys())
+
+    result: dict[str, list[int]] = {}
+    for code in all_codes:
+        nets = [day_dict.get(code, 0) for _, day_dict in collected_asc]
+        result[code] = nets
+
+    log.info(f'   外資連買字典建立完成：{len(result)} 檔')
+    return result
 
 
 # ── 1. 活躍股清單 ─────────────────────────────────────────────────────────────
@@ -153,10 +273,18 @@ def get_market_cap_yi(ticker_obj, close, shares_dict, code) -> float | None:
 
 
 # ── 4. 單一股票篩選 ───────────────────────────────────────────────────────────
-def screen_one(stock: dict, shares_dict: dict,
+def screen_one(stock: dict, shares_dict: dict, foreign_dict: dict,
                cutoff: pd.Timestamp | None = None) -> dict | None:
     code, suffix = stock['code'], stock['suffix']
     try:
+        # ⑥ 外資連買（先查字典，不過就直接跳出，省 API 時間）
+        if foreign_dict:   # 有外資資料才做此過濾
+            nets = foreign_dict.get(code, [])
+            if len(nets) < FOREIGN_NET_BUY_DAYS:
+                return None
+            if not all(n > 0 for n in nets[-FOREIGN_NET_BUY_DAYS:]):
+                return None
+
         ticker = yf.Ticker(f"{code}{suffix}")
         df = ticker.history(period='1y', auto_adjust=True)
         if df.empty or len(df) < 65:
@@ -193,20 +321,25 @@ def screen_one(stock: dict, shares_dict: dict,
         close = float(latest['Close'])
         mktcap_yi = get_market_cap_yi(ticker, close, shares_dict, code)
 
+        # 外資連買淨量（張）顯示用
+        nets = foreign_dict.get(code, [])
+        foreign_net_lots = [round(n / 1000, 0) for n in nets[-FOREIGN_NET_BUY_DAYS:]] if nets else []
+
         return {
-            'code':         code,
-            'name':         stock['name'],
-            'group':        stock['group'],
-            'data_date':    str(df.index[-1].date()),
-            'close':        round(close, 2),
-            'mktcap_yi':    mktcap_yi,
-            'vol_k':        int(vol_lots),
-            'bias1':        round(float(latest['BIAS1']), 2),
-            'bias2':        round(float(latest['BIAS2']), 2),
-            'bias3':        round(float(latest['BIAS3']), 2),
-            'daily_spread': round(float(d_spread), 2),
-            'suffix':       suffix,
-            'screened_at':  datetime.now().strftime('%Y-%m-%d %H:%M'),
+            'code':             code,
+            'name':             stock['name'],
+            'group':            stock['group'],
+            'data_date':        str(df.index[-1].date()),
+            'close':            round(close, 2),
+            'mktcap_yi':        mktcap_yi,
+            'vol_k':            int(vol_lots),
+            'bias1':            round(float(latest['BIAS1']), 2),
+            'bias2':            round(float(latest['BIAS2']), 2),
+            'bias3':            round(float(latest['BIAS3']), 2),
+            'daily_spread':     round(float(d_spread), 2),
+            'foreign_net_3d':   str(foreign_net_lots),   # e.g. "[1200.0, 3400.0, 800.0]"
+            'suffix':           suffix,
+            'screened_at':      datetime.now().strftime('%Y-%m-%d %H:%M'),
         }
     except Exception as e:
         log.debug(f"[{code}] skip: {e}")
@@ -224,8 +357,10 @@ def run(target_date: str | None = None, max_stocks: int | None = None):
     if cutoff:
         log.info(f"[DATE MODE] 截止日期: {target_date}")
 
-    shares_dict = build_shares_dict()
-    candidates  = fetch_active_stock_list()
+    shares_dict  = build_shares_dict()
+    foreign_dict = fetch_foreign_netbuy_dict(n_days=FOREIGN_NET_BUY_DAYS)
+    candidates   = fetch_active_stock_list()
+
     if max_stocks:
         candidates = candidates[:max_stocks]
         log.info(f"[PREVIEW] 只掃前 {max_stocks} 檔")
@@ -235,7 +370,8 @@ def run(target_date: str | None = None, max_stocks: int | None = None):
     for i, stock in enumerate(candidates):
         if i % 50 == 0 and i > 0:
             log.info(f"  進度 {i}/{total}  通過: {len(results)} 檔")
-        result = screen_one(stock, shares_dict=shares_dict, cutoff=cutoff)
+        result = screen_one(stock, shares_dict=shares_dict,
+                            foreign_dict=foreign_dict, cutoff=cutoff)
         if result:
             results.append(result)
             mc_str = f"{result['mktcap_yi']:.0f}億" if result['mktcap_yi'] else "N/A"
@@ -244,7 +380,8 @@ def run(target_date: str | None = None, max_stocks: int | None = None):
                 f"收盤:{result['close']:>8.2f}  市值:{mc_str:>7}  "
                 f"量:{result['vol_k']:>6}張  "
                 f"BIAS:{result['bias1']:.1f}/{result['bias2']:.1f}/{result['bias3']:.1f}  "
-                f"日縮:{result['daily_spread']:.2f}%"
+                f"日縮:{result['daily_spread']:.2f}%  "
+                f"外資連買:{result['foreign_net_3d']}"
             )
         time.sleep(SLEEP)
 
@@ -265,12 +402,12 @@ def run(target_date: str | None = None, max_stocks: int | None = None):
         log.info(f"結果儲存至: {csv_path}")
 
         cols = ['code', 'name', 'group', 'data_date', 'close', 'mktcap_yi',
-                'vol_k', 'bias1', 'bias2', 'bias3', 'daily_spread']
-        print("\n" + "=" * 95)
+                'vol_k', 'bias1', 'bias2', 'bias3', 'daily_spread', 'foreign_net_3d']
+        print("\n" + "=" * 110)
         print(f"📊  Taiwan MA Screener v2  資料截至: {target_date or '最新'}  (市值單位: 億元)")
-        print("=" * 95)
+        print("=" * 110)
         print(df_out[cols].to_string(index=False))
-        print("=" * 95)
+        print("=" * 110)
         return df_out
 
     log.info("今日無股票通過所有篩選條件")
