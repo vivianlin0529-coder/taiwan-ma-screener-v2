@@ -31,7 +31,7 @@ def build_html(df: pd.DataFrame, run_time: datetime) -> str:
 P1 振幅 &gt;1% &nbsp;|&nbsp; P2 量 &gt;200張 &nbsp;|&nbsp; P3 換手率 &gt;0.5% &nbsp;|&nbsp;
 P4 近季EPS &gt;0 &nbsp;|&nbsp; P5 PE &lt;20<br>
 P8 K值今&gt;昨 &nbsp;|&nbsp; P9 MACD OSC今&gt;昨 &nbsp;|&nbsp;
-P10 昨OSC&lt;前OSC（OSC V底反轉）<br>
+P10 昨OSC &lt;= 前OSC（OSC V底反轉）<br>
 <span style='color:#888;font-size:11px'>排序：成交量由大到小 ／ P6、P7 待確認後補入</span>
 </div>"""
 

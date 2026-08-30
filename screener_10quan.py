@@ -13,7 +13,7 @@ screener_10quan.py — 十全奧義選股（日更）
   [P6, P7 未擷取到，後續補入]
   P8. 9K 今 > 9K 昨         KD 指標 K 值上升
   P9. 今 MACD OSC(5,10,10) > 昨 MACD OSC
-  P10.昨 MACD OSC(5,10,10) < 前 MACD OSC（V底反轉，今日開始往上）
+  P10.昨 MACD OSC(5,10,10) <= 前 MACD OSC（V底反轉，今日開始往上）
 排序：成交量由大到小
 """
 
@@ -224,8 +224,8 @@ def screen_one(stock, shares_dict):
         osc_t  = float(osc.iloc[-1])
         osc_y  = float(osc.iloc[-2])
         osc_yy = float(osc.iloc[-3])
-        if not (osc_t > osc_y and osc_y < osc_yy):
-            return None   # 需要：今>昨 且 昨<前（OSC V形反轉）
+        if not (osc_t > osc_y and osc_y <= osc_yy):
+            return None   # P9: 今>昨  P10: 昨<=前（OSC V底反轉）
 
         # 漲跌幅
         chg = (close - prev_close) / prev_close * 100
