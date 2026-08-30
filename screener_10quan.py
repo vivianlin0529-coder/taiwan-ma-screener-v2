@@ -8,14 +8,14 @@ screener_10quan.py — 十全奧義選股（日更）
   3.  近一交易日股價振幅 > 1%      (High - Low) / prev_close
   4.  近一日成交量 > 200 張
   5.  近一日週轉率 > 0.5%          volume / shares_outstanding
-  6.  近 1 季 EPS 合計 > 0 元
-  7.  本益比 < 20
+  6.  近 1 季 EPS 合計 > 0 元     ⚠️ 已暫停（yfinance 拖慢整體，待替代資料源）
+  7.  本益比 < 20                  ⚠️ 已暫停（同上）
   8.  9K 大於前一值                KD(9) 的 K 線今 > 昨
   9.  今輔線值(5,10,10 XMACD) > 昨輔線值
   10. 昨輔線值(5,10,10 XMACD) <= 前輔線值  （OSC V 底反轉）
 
 排序：成交量由大到小
-注意：yfinance 基本面(EPS/PE)資料若缺失，該條件自動跳過（不排除）
+注意：條件 6/7 (EPS/PE) 暫停，待導入穩定資料源後補回
 """
 
 import os, sys, time, json, logging, warnings
@@ -183,25 +183,6 @@ def compute_macd_osc(series: pd.Series,
     return dif - sig   # 輔線值
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 基本面：EPS / P/E（yfinance，缺失則回傳 None，不影響主流程）
-# ─────────────────────────────────────────────────────────────────────────────
-def get_fundamentals(ticker_obj) -> tuple:
-    """回傳 (pe, eps_quarterly) 或 (None, None)"""
-    try:
-        pe = getattr(ticker_obj.fast_info, 'p_e_ratio', None)
-    except Exception:
-        pe = None
-    try:
-        qe = ticker_obj.quarterly_earnings
-        if qe is not None and not qe.empty and 'Earnings' in qe.columns:
-            eps_q = float(qe['Earnings'].iloc[-1])
-        else:
-            eps_q = None
-    except Exception:
-        eps_q = None
-    return pe, eps_q
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 單股篩選主函式
@@ -251,13 +232,6 @@ def screen_one(stock: dict, shares_dict: dict) -> dict | None:
         if turnover < TURNOVER_MIN:
             return None
 
-        # ── 條件 6 / 7：EPS & P/E（缺資料則略過，不排除）───────────────────
-        pe, eps_q = get_fundamentals(ticker)
-        if eps_q is not None and eps_q <= 0:
-            return None
-        if pe is not None and pe >= PE_MAX:
-            return None
-
         # ── 條件 8：9K 今 > 昨 ───────────────────────────────────────────────
         K_vals = compute_kd(df)
         if len(K_vals) < 2:
@@ -293,8 +267,6 @@ def screen_one(stock: dict, shares_dict: dict) -> dict | None:
             '振幅(%)':   round(amplitude, 2),
             '量(張)':    int(vol_lots),
             '換手率(%)': round(turnover, 2),
-            'EPS(季)':   round(eps_q, 2) if eps_q is not None else None,
-            'P/E':       round(pe, 1)    if pe    is not None else None,
             'K值(9)':    round(k_today, 1),
             'K值昨':     round(k_prev,  1),
             'OSC今':     round(osc_t,  4),

@@ -39,8 +39,8 @@ def build_html(df: pd.DataFrame, run_time: datetime) -> str:
 3. 股價振幅 <b>&gt; 1%</b>（當日 High − Low）<br>
 4. 成交量 <b>&gt; 200 張</b><br>
 5. 週轉率 <b>&gt; 0.5%</b><br>
-6. 近 1 季 EPS <b>&gt; 0 元</b>（缺資料自動略過）<br>
-7. 本益比 <b>&lt; 20</b>（缺資料自動略過）<br>
+6. 近 1 季 EPS &gt; 0 元 &nbsp;<span style='color:#e67e22'>⏸ 暫停（待替代資料源）</span><br>
+7. 本益比 &lt; 20 &nbsp;<span style='color:#e67e22'>⏸ 暫停（待替代資料源）</span><br>
 8. 9K <b>今 &gt; 昨</b>（KD 指標 K 值上升）<br>
 9. 輔線值 (5,10,10 XMACD) <b>今 &gt; 昨</b><br>
 10. 輔線值 (5,10,10 XMACD) <b>昨 &lt;= 前</b>（OSC V 底反轉）<br>
@@ -56,8 +56,6 @@ def build_html(df: pd.DataFrame, run_time: datetime) -> str:
   <th style='padding:6px 8px'>振幅</th>
   <th style='padding:6px 8px'>量(張)</th>
   <th style='padding:6px 8px'>換手率</th>
-  <th style='padding:6px 8px'>EPS(季)</th>
-  <th style='padding:6px 8px'>P/E</th>
   <th style='padding:6px 8px'>K值(9)<br><small>今/昨</small></th>
   <th style='padding:6px 8px'>OSC(5,10,10)<br><small>今/昨/前</small></th>
   <th style='padding:6px 8px'>3日<br>新高</th>
@@ -93,8 +91,6 @@ def build_html(df: pd.DataFrame, run_time: datetime) -> str:
   <td style='padding:5px 8px;text-align:right'>{_fmt(r.get('振幅(%)'), '.2f')}%</td>
   <td style='padding:5px 8px;text-align:right'>{int(r.get("量(張)", 0)):,}</td>
   <td style='padding:5px 8px;text-align:right'>{_fmt(r.get('換手率(%)'), '.2f')}%</td>
-  <td style='padding:5px 8px;text-align:right'>{_fmt(r.get('EPS(季)'), '.2f')}</td>
-  <td style='padding:5px 8px;text-align:right'>{_fmt(r.get('P/E'), '.1f')}</td>
   <td style='padding:5px 8px;text-align:center'>{k_html}</td>
   <td style='padding:5px 8px;text-align:center;font-size:11px'>{osc_html}</td>
   <td style='padding:5px 8px;text-align:center;color:#27AE60;font-weight:bold'>
@@ -103,7 +99,8 @@ def build_html(df: pd.DataFrame, run_time: datetime) -> str:
 
     if not rows_html:
         rows_html = ("<tr><td colspan='12' style='padding:20px;text-align:center;"
-                     "color:#888'>今日無符合條件股票</td></tr>")
+                     "color:#888'>今日無符合條件股票</td></tr>",
+                    ).replace("colspan='12'", "colspan='10'")
 
     return f"""<html><body style='font-family:Arial,sans-serif;font-size:13px'>
 <h3>🎯 十全奧義 選股結果</h3>
