@@ -20,23 +20,22 @@ on:
         default: 'false'
 
 jobs:
-  screen:
+  # ── Job 1: 均線糾結篩選 ─────────────────────────────────────────────────────
+  bias_screener:
+    name: 均線糾結 BIAS+縮軌
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
       contents: write
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Cache pip
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
@@ -51,17 +50,17 @@ jobs:
           FORCE="${{ github.event.inputs.force || 'false' }}"
           if [ "$FORCE" = "true" ]; then
             echo "market_open=true" >> $GITHUB_OUTPUT
-            echo "⚡ 強制執行模式，略過休市檢查"
+            echo "⚡ 強制執行模式"
           else
             if python check_market.py; then
-              echo "market_open=true" >> $GITHUB_OUTPUT
+              echo "market_open=true"  >> $GITHUB_OUTPUT
             else
               echo "market_open=false" >> $GITHUB_OUTPUT
-              echo "🚫 今日休市，跳過篩選與寄信"
+              echo "🚫 今日休市，跳過"
             fi
           fi
 
-      - name: Run screener
+      - name: Run 均線糾結 screener
         if: steps.market_check.outputs.market_open == 'true'
         run: |
           DATE_ARG="${{ github.event.inputs.date }}"
@@ -71,7 +70,7 @@ jobs:
           [ "$PREVIEW" -gt "0" ] 2>/dev/null && ARGS="$ARGS --preview $PREVIEW"
           python screener.py $ARGS
 
-      - name: Send email report
+      - name: Send 均線糾結 email
         if: steps.market_check.outputs.market_open == 'true'
         env:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
@@ -80,25 +79,104 @@ jobs:
           if [ -n "$CSV" ]; then
             python send_email.py "$CSV"
           else
-            echo "No CSV found, skipping email"
+            echo "均線糾結: 無 CSV，跳過寄信"
           fi
 
-      - name: Upload result artifact
+      - name: Upload 均線糾結 artifact
         if: steps.market_check.outputs.market_open == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: screener-${{ github.run_number }}
-          path: output/
+          name: bias-screener-${{ github.run_number }}
+          path: output/screener_*.csv
           retention-days: 90
 
-      - name: Commit & push results
+      - name: Commit & push 均線糾結 results
         if: steps.market_check.outputs.market_open == 'true'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add output/
           git diff --cached --quiet || \
-            git commit -m "📊 screener $(date +'%Y-%m-%d 13:30 CST') [skip ci]"
+            git commit -m "📊 均線糾結 $(date +'%Y-%m-%d 13:30 CST') [skip ci]"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Job 2: 十全奧義選股 ─────────────────────────────────────────────────────
+  quan_screener:
+    name: 十全奧義選股
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check market open
+        id: market_check
+        run: |
+          FORCE="${{ github.event.inputs.force || 'false' }}"
+          if [ "$FORCE" = "true" ]; then
+            echo "market_open=true" >> $GITHUB_OUTPUT
+          else
+            if python check_market.py; then
+              echo "market_open=true"  >> $GITHUB_OUTPUT
+            else
+              echo "market_open=false" >> $GITHUB_OUTPUT
+              echo "🚫 今日休市，跳過"
+            fi
+          fi
+
+      - name: Run 十全奧義 screener
+        if: steps.market_check.outputs.market_open == 'true'
+        run: |
+          PREVIEW="${{ github.event.inputs.preview || '0' }}"
+          ARGS=""
+          [ "$PREVIEW" -gt "0" ] 2>/dev/null && ARGS="$ARGS --preview $PREVIEW"
+          python screener_10quan.py $ARGS
+
+      - name: Send 十全奧義 email
+        if: steps.market_check.outputs.market_open == 'true'
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: |
+          CSV=$(ls -t output/quan_*.csv 2>/dev/null | head -1)
+          if [ -n "$CSV" ]; then
+            python send_10quan_email.py "$CSV"
+          else
+            echo "十全奧義: 無 CSV，跳過寄信"
+          fi
+
+      - name: Upload 十全奧義 artifact
+        if: steps.market_check.outputs.market_open == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: quan-screener-${{ github.run_number }}
+          path: output/quan_*.csv
+          retention-days: 90
+
+      - name: Commit & push 十全奧義 results
+        if: steps.market_check.outputs.market_open == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add output/
+          git diff --cached --quiet || \
+            git commit -m "🎯 十全奧義 $(date +'%Y-%m-%d 13:30 CST') [skip ci]"
           git push
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
