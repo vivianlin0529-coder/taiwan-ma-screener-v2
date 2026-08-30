@@ -218,6 +218,9 @@ def screen_one(stock, shares_dict, foreign_dict, rev_yoy_dict):
         df = ticker.history(period='14mo', auto_adjust=True)
         if df is None or df.empty or len(df) < 65: return None
         df.index = pd.to_datetime(df.index).tz_localize(None)
+        # 排除週六日（yfinance 偶爾夾帶週末列）
+        df = df[df.index.dayofweek < 5]
+        if df.empty or len(df) < 65: return None
 
         # ── 計算 MA ──
         for p in [5, 10, 22, 60]:
