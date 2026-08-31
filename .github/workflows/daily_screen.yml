@@ -1,26 +1,24 @@
 name: Daily MA Screener
 
 on:
+  # ── 主排程：cron-job.org 每日 13:30 TST 透過 workflow_dispatch 觸發 ──────
+  # GitHub 內建排程 (schedule) 常延遲 1-6 小時，作為備援保留
   schedule:
-    # 每天 13:30 台灣時間（UTC+8 → 05:30 UTC），週一至週五
-    - cron: '30 5 * * 1-5'
+    - cron: '30 5 * * 1-5'   # 05:30 UTC = 13:30 TST（備援，可能延遲）
+
   workflow_dispatch:
     inputs:
-      date:
-        description: '截止日期 YYYY-MM-DD（空白 = 最新）'
-        required: false
-        default: ''
       preview:
-        description: 'Preview 模式：只跑前 N 檔（0 = 全量）'
+        description: 'Preview：只跑前 N 檔（0 = 全量）'
         required: false
         default: '0'
       force:
-        description: '強制執行（忽略休市檢查）true/false'
+        description: '強制執行（忽略休市）true/false'
         required: false
         default: 'false'
 
 jobs:
-  # ── Job 1: 均線糾結篩選 ─────────────────────────────────────────────────────
+  # ── Job 1：均線糾結 BIAS+縮軌 ───────────────────────────────────────────────
   bias_screener:
     name: 均線糾結 BIAS+縮軌
     runs-on: ubuntu-latest
@@ -50,24 +48,23 @@ jobs:
           FORCE="${{ github.event.inputs.force || 'false' }}"
           if [ "$FORCE" = "true" ]; then
             echo "market_open=true" >> $GITHUB_OUTPUT
-            echo "⚡ 強制執行模式"
+            echo "⚡ 強制執行"
           else
             if python check_market.py; then
               echo "market_open=true"  >> $GITHUB_OUTPUT
+              echo "✅ 開市"
             else
               echo "market_open=false" >> $GITHUB_OUTPUT
-              echo "🚫 今日休市，跳過"
+              echo "🚫 休市，跳過"
             fi
           fi
 
       - name: Run 均線糾結 screener
         if: steps.market_check.outputs.market_open == 'true'
         run: |
-          DATE_ARG="${{ github.event.inputs.date }}"
           PREVIEW="${{ github.event.inputs.preview || '0' }}"
           ARGS=""
-          [ -n "$DATE_ARG" ] && ARGS="$ARGS --date $DATE_ARG"
-          [ "$PREVIEW" -gt "0" ] 2>/dev/null && ARGS="$ARGS --preview $PREVIEW"
+          [ "$PREVIEW" -gt "0" ] 2>/dev/null && ARGS="--preview $PREVIEW"
           python screener.py $ARGS
 
       - name: Send 均線糾結 email
@@ -76,33 +73,28 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: |
           CSV=$(ls -t output/screener_*.csv 2>/dev/null | head -1)
-          if [ -n "$CSV" ]; then
-            python send_email.py "$CSV"
-          else
-            echo "均線糾結: 無 CSV，跳過寄信"
-          fi
+          [ -n "$CSV" ] && python send_email.py "$CSV" || echo "無 CSV，跳過"
 
-      - name: Upload 均線糾結 artifact
+      - name: Upload artifact
         if: steps.market_check.outputs.market_open == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: bias-screener-${{ github.run_number }}
+          name: bias-${{ github.run_number }}
           path: output/screener_*.csv
           retention-days: 90
 
-      - name: Commit & push 均線糾結 results
+      - name: Commit results
         if: steps.market_check.outputs.market_open == 'true'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add output/
-          git diff --cached --quiet || \
-            git commit -m "📊 均線糾結 $(date +'%Y-%m-%d 13:30 CST') [skip ci]"
+          git diff --cached --quiet || git commit -m "📊 均線糾結 $(date +'%Y-%m-%d TST') [skip ci]"
           git push
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ── Job 2: 十全奧義選股 ─────────────────────────────────────────────────────
+  # ── Job 2：十全奧義選股 ──────────────────────────────────────────────────────
   quan_screener:
     name: 十全奧義選股
     runs-on: ubuntu-latest
@@ -132,12 +124,14 @@ jobs:
           FORCE="${{ github.event.inputs.force || 'false' }}"
           if [ "$FORCE" = "true" ]; then
             echo "market_open=true" >> $GITHUB_OUTPUT
+            echo "⚡ 強制執行"
           else
             if python check_market.py; then
               echo "market_open=true"  >> $GITHUB_OUTPUT
+              echo "✅ 開市"
             else
               echo "market_open=false" >> $GITHUB_OUTPUT
-              echo "🚫 今日休市，跳過"
+              echo "🚫 休市，跳過"
             fi
           fi
 
@@ -146,7 +140,7 @@ jobs:
         run: |
           PREVIEW="${{ github.event.inputs.preview || '0' }}"
           ARGS=""
-          [ "$PREVIEW" -gt "0" ] 2>/dev/null && ARGS="$ARGS --preview $PREVIEW"
+          [ "$PREVIEW" -gt "0" ] 2>/dev/null && ARGS="--preview $PREVIEW"
           python screener_10quan.py $ARGS
 
       - name: Send 十全奧義 email
@@ -155,28 +149,23 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: |
           CSV=$(ls -t output/quan_*.csv 2>/dev/null | head -1)
-          if [ -n "$CSV" ]; then
-            python send_10quan_email.py "$CSV"
-          else
-            echo "十全奧義: 無 CSV，跳過寄信"
-          fi
+          [ -n "$CSV" ] && python send_10quan_email.py "$CSV" || echo "無 CSV，跳過"
 
-      - name: Upload 十全奧義 artifact
+      - name: Upload artifact
         if: steps.market_check.outputs.market_open == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: quan-screener-${{ github.run_number }}
+          name: quan-${{ github.run_number }}
           path: output/quan_*.csv
           retention-days: 90
 
-      - name: Commit & push 十全奧義 results
+      - name: Commit results
         if: steps.market_check.outputs.market_open == 'true'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add output/
-          git diff --cached --quiet || \
-            git commit -m "🎯 十全奧義 $(date +'%Y-%m-%d 13:30 CST') [skip ci]"
+          git diff --cached --quiet || git commit -m "🎯 十全奧義 $(date +'%Y-%m-%d TST') [skip ci]"
           git push
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
