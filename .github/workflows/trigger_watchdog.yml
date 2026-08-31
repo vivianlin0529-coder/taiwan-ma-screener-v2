@@ -1,0 +1,77 @@
+name: Screener Watchdog (13:30 TST 準時觸發)
+
+# 每天週一至週五，05:00–07:45 UTC (13:00–15:45 TST) 每 15 分鐘檢查一次
+# → 只要主 workflow 尚未成功跑完，就立刻觸發
+# → 已跑成功就跳過，不重複寄信
+on:
+  schedule:
+    - cron: '0  5 * * 1-5'   # 13:00 TST
+    - cron: '15 5 * * 1-5'   # 13:15 TST
+    - cron: '30 5 * * 1-5'   # 13:30 TST ← 目標時間
+    - cron: '45 5 * * 1-5'   # 13:45 TST
+    - cron: '0  6 * * 1-5'   # 14:00 TST
+    - cron: '15 6 * * 1-5'   # 14:15 TST
+    - cron: '30 6 * * 1-5'   # 14:30 TST
+    - cron: '45 6 * * 1-5'   # 14:45 TST
+    - cron: '0  7 * * 1-5'   # 15:00 TST
+    - cron: '30 7 * * 1-5'   # 15:30 TST
+  workflow_dispatch: {}      # 也可手動觸發測試
+
+jobs:
+  watchdog:
+    name: 檢查並觸發選股程式
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: 確認是否為交易日且尚未完成
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TODAY=$(TZ=Asia/Taipei date +%Y-%m-%d)
+          echo "今日(TST): $TODAY"
+
+          # 週六日直接跳過
+          DOW=$(TZ=Asia/Taipei date +%u)   # 1=Mon … 7=Sun
+          if [ "$DOW" -ge 6 ]; then
+            echo "週末，跳過" && echo "should_run=false" >> $GITHUB_OUTPUT && exit 0
+          fi
+
+          # 查今天 daily_screen.yml 是否已有 success 的 run
+          RESULT=$(curl -s \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/daily_screen.yml/runs?created=$TODAY&per_page=20" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" | python3 -c "
+          import sys, json
+          runs = json.load(sys.stdin).get('workflow_runs', [])
+          done = [r for r in runs if r.get('conclusion') == 'success']
+          running = [r for r in runs if r.get('status') in ('in_progress','queued','waiting')]
+          print('done' if done else ('running' if running else 'not_started'))
+          ")
+
+          echo "狀態: $RESULT"
+          if [ "$RESULT" = "done" ]; then
+            echo "✅ 今天已跑完，不重複觸發"
+            echo "should_run=false" >> $GITHUB_OUTPUT
+          elif [ "$RESULT" = "running" ]; then
+            echo "⏳ 正在執行中，不重複觸發"
+            echo "should_run=false" >> $GITHUB_OUTPUT
+          else
+            echo "🚀 尚未執行，準備觸發"
+            echo "should_run=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 觸發主選股 Workflow
+        if: steps.check.outputs.should_run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/daily_screen.yml/dispatches" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Content-Type: application/json" \
+            -d '{"ref":"main","inputs":{"force":"false","preview":"0"}}')
+          echo "GitHub API 回應: HTTP $HTTP"
+          [ "$HTTP" = "204" ] && echo "✅ 觸發成功" || echo "❌ 觸發失敗 HTTP $HTTP"
